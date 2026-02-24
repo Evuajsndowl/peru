@@ -23,7 +23,7 @@ last_checked_id = None
 def is_owner(user_id: int) -> bool:
     return BOT_OWNER_ID != 0 and user_id == BOT_OWNER_ID
 
-# ================= READY =================
+# ================= READY EVENT =================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -64,7 +64,7 @@ async def set_log_channel(interaction: discord.Interaction, channel: discord.Tex
         ephemeral=True
     )
 
-# ================= MESSAGE CLEANER =================
+# ================= MESSAGE CLEANER LOOP =================
 @tasks.loop(seconds=POLL_SECONDS)
 async def check_channel():
     global last_checked_id
@@ -79,9 +79,7 @@ async def check_channel():
         except:
             return
 
-    log_channel = None
-    if log_channel_id:
-        log_channel = bot.get_channel(log_channel_id)
+    log_channel = bot.get_channel(log_channel_id) if log_channel_id else None
 
     try:
         async for message in channel.history(
@@ -92,15 +90,21 @@ async def check_channel():
             if message.author.bot:
                 continue
 
-            # Allow image attachments
-            has_image = any(
-                attachment.content_type and attachment.content_type.startswith("image")
-                for attachment in message.attachments
-            )
+            # Detect image attachments
+            image_attachments = [
+                a for a in message.attachments
+                if a.content_type and a.content_type.startswith("image")
+            ]
 
-            if has_image:
+            has_image = len(image_attachments) > 0
+            has_text = bool(message.content.strip())
+
+            # ✅ Allow ONLY pure image messages
+            if has_image and not has_text:
                 last_checked_id = message.id
                 continue
+
+            # ❌ Everything else gets deleted
 
             # Log BEFORE deleting
             if log_channel:
@@ -109,9 +113,28 @@ async def check_channel():
                     color=discord.Color.red(),
                     timestamp=message.created_at
                 )
-                embed.add_field(name="User", value=f"{message.author} ({message.author.id})", inline=False)
-                embed.add_field(name="Channel", value=channel.mention, inline=False)
-                embed.add_field(name="Content", value=message.content or "*No text content*", inline=False)
+                embed.add_field(
+                    name="User",
+                    value=f"{message.author} ({message.author.id})",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Channel",
+                    value=channel.mention,
+                    inline=False
+                )
+                embed.add_field(
+                    name="Content",
+                    value=message.content or "*No text content*",
+                    inline=False
+                )
+
+                if image_attachments:
+                    embed.add_field(
+                        name="Image Attachments",
+                        value="\n".join(a.url for a in image_attachments),
+                        inline=False
+                    )
 
                 try:
                     await log_channel.send(embed=embed)

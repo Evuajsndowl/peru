@@ -2,20 +2,26 @@ import os
 import asyncio
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 from aiohttp import web
 
 # ================= CONFIG =================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
-SOURCE_CHANNEL_ID = int(os.getenv("SOURCE_CHANNEL_ID", "0"))
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
 POLL_SECONDS = 45
 
 # ================= BOT SETUP =================
 intents = discord.Intents.default()
-intents.message_content = True  # REQUIRED
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Channel ID set dynamically
+target_channel_id = None
 last_checked_id = None
+
+# ================= OWNER CHECK =================
+def is_owner(user_id: int) -> bool:
+    return BOT_OWNER_ID != 0 and user_id == BOT_OWNER_ID
 
 # ================= READY EVENT =================
 @bot.event
@@ -25,21 +31,40 @@ async def on_ready():
     if not check_channel.is_running():
         check_channel.start()
 
-# ================= MESSAGE CLEANER =================
+# ================= SLASH COMMAND =================
+@bot.tree.command(name="setchannel", description="Set the channel to monitor (Owner only)")
+@app_commands.describe(channel="The channel the bot should monitor")
+async def set_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    global target_channel_id, last_checked_id
+
+    if not is_owner(interaction.user.id):
+        await interaction.response.send_message(
+            "❌ Owner-only command.",
+            ephemeral=True
+        )
+        return
+
+    target_channel_id = channel.id
+    last_checked_id = None  # Reset tracker
+
+    await interaction.response.send_message(
+        f"✅ Now monitoring {channel.mention}",
+        ephemeral=True
+    )
+
+# ================= MESSAGE CLEANER LOOP =================
 @tasks.loop(seconds=POLL_SECONDS)
 async def check_channel():
     global last_checked_id
 
-    if not SOURCE_CHANNEL_ID:
-        print("SOURCE_CHANNEL_ID not set.")
+    if not target_channel_id:
         return
 
-    channel = bot.get_channel(SOURCE_CHANNEL_ID)
+    channel = bot.get_channel(target_channel_id)
     if channel is None:
         try:
-            channel = await bot.fetch_channel(SOURCE_CHANNEL_ID)
-        except Exception:
-            print("Could not fetch channel.")
+            channel = await bot.fetch_channel(target_channel_id)
+        except:
             return
 
     try:

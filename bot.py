@@ -15,15 +15,15 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Channel ID set dynamically
 target_channel_id = None
+log_channel_id = None
 last_checked_id = None
 
 # ================= OWNER CHECK =================
 def is_owner(user_id: int) -> bool:
     return BOT_OWNER_ID != 0 and user_id == BOT_OWNER_ID
 
-# ================= READY EVENT =================
+# ================= READY =================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -31,28 +31,40 @@ async def on_ready():
     if not check_channel.is_running():
         check_channel.start()
 
-# ================= SLASH COMMAND =================
+# ================= SET MONITOR CHANNEL =================
 @bot.tree.command(name="setchannel", description="Set the channel to monitor (Owner only)")
-@app_commands.describe(channel="The channel the bot should monitor")
 async def set_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     global target_channel_id, last_checked_id
 
     if not is_owner(interaction.user.id):
-        await interaction.response.send_message(
-            "❌ Owner-only command.",
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ Owner-only command.", ephemeral=True)
         return
 
     target_channel_id = channel.id
-    last_checked_id = None  # Reset tracker
+    last_checked_id = None
 
     await interaction.response.send_message(
-        f"✅ Now monitoring {channel.mention}",
+        f"✅ Monitoring {channel.mention}",
         ephemeral=True
     )
 
-# ================= MESSAGE CLEANER LOOP =================
+# ================= SET LOG CHANNEL =================
+@bot.tree.command(name="setlogchannel", description="Set the log channel (Owner only)")
+async def set_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    global log_channel_id
+
+    if not is_owner(interaction.user.id):
+        await interaction.response.send_message("❌ Owner-only command.", ephemeral=True)
+        return
+
+    log_channel_id = channel.id
+
+    await interaction.response.send_message(
+        f"✅ Log channel set to {channel.mention}",
+        ephemeral=True
+    )
+
+# ================= MESSAGE CLEANER =================
 @tasks.loop(seconds=POLL_SECONDS)
 async def check_channel():
     global last_checked_id
@@ -66,6 +78,10 @@ async def check_channel():
             channel = await bot.fetch_channel(target_channel_id)
         except:
             return
+
+    log_channel = None
+    if log_channel_id:
+        log_channel = bot.get_channel(log_channel_id)
 
     try:
         async for message in channel.history(
@@ -85,6 +101,22 @@ async def check_channel():
             if has_image:
                 last_checked_id = message.id
                 continue
+
+            # Log BEFORE deleting
+            if log_channel:
+                embed = discord.Embed(
+                    title="🗑 Message Deleted",
+                    color=discord.Color.red(),
+                    timestamp=message.created_at
+                )
+                embed.add_field(name="User", value=f"{message.author} ({message.author.id})", inline=False)
+                embed.add_field(name="Channel", value=channel.mention, inline=False)
+                embed.add_field(name="Content", value=message.content or "*No text content*", inline=False)
+
+                try:
+                    await log_channel.send(embed=embed)
+                except:
+                    pass
 
             try:
                 await message.delete()
